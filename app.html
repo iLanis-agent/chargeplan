@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChargePlan - app</title>
+<style>
+  :root { --bg:#0c1416; --card:#132024; --card2:#0f1a1d; --line:#1e3237; --ink:#e8f4f2; --dim:#8fb3ad; --teal:#5eead4; --amber:#fbbf24; --red:#fca5a5; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; padding:28px 20px 64px; }
+  header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:22px; }
+  header h1 { font-size:26px; margin:0; }
+  header h1 span { color:var(--teal); }
+  header a { color:var(--dim); text-decoration:none; font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; margin:0 0 18px; }
+  .card h2 { margin:0 0 14px; font-size:18px; }
+  label { display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--dim); margin:0 0 6px; }
+  input { width:100%; background:var(--card2); border:1px solid var(--line); color:var(--ink); border-radius:10px; padding:10px 12px; font-size:16px; }
+  .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:14px; }
+  button { background:var(--teal); color:#06231e; border:0; font-weight:700; border-radius:10px; padding:11px 22px; font-size:16px; cursor:pointer; }
+  .hint { color:var(--dim); font-size:14px; margin-top:10px; }
+  .verdict { border-radius:12px; padding:16px; font-weight:700; font-size:17px; margin-bottom:14px; }
+  .verdict.comfortable { background:#12312c; color:var(--teal); }
+  .verdict.tight { background:#3a2c07; color:var(--amber); }
+  .verdict.wont-fit, .verdict.needs-now { background:#3a1414; color:var(--red); }
+  .verdict.already-there { background:#12312c; color:var(--teal); }
+  .sess { display:flex; justify-content:space-between; padding:10px 4px; border-top:1px solid var(--line); }
+  .sess .t { color:var(--teal); font-variant-numeric:tabular-nums; }
+  .meta { color:var(--dim); font-size:14px; margin-top:12px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Charge<span>Plan</span></h1>
+    <a href="index.html">&larr; Home</a>
+  </header>
+
+  <div class="card">
+    <h2>Car and target</h2>
+    <div class="row3">
+      <div><label for="f-cap">Battery (kWh)</label><input id="f-cap" type="number" min="10" max="200" value="60"></div>
+      <div><label for="f-now">Charge now (%)</label><input id="f-now" type="number" min="0" max="100" value="20"></div>
+      <div><label for="f-target">Target (%)</label><input id="f-target" type="number" min="0" max="100" value="80"></div>
+    </div>
+    <div class="row3">
+      <div><label for="f-kw">Charger (kW)</label><input id="f-kw" type="number" min="1" max="22" step="0.1" value="11"></div>
+      <div><label for="f-ready">Ready by</label><input id="f-ready" type="time" value="07:00"></div>
+      <div><label>&nbsp;</label><button id="f-plan">Plan tonight</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Cheap window and price</h2>
+    <div class="row3">
+      <div><label for="f-wstart">Window starts</label><input id="f-wstart" type="time" value="23:00"></div>
+      <div><label for="f-wend">Window ends</label><input id="f-wend" type="time" value="07:00"></div>
+      <div><label for="f-rate">Off-peak price ($/kWh)</label><input id="f-rate" type="number" min="0" step="0.01" value="0.15"></div>
+    </div>
+    <p class="hint">The window can wrap midnight (23:00 to 07:00). Plan saves automatically.</p>
+  </div>
+
+  <div class="card hidden" id="result">
+    <h2>Tonight's plan</h2>
+    <div class="verdict" id="verdict"></div>
+    <div id="sessions"></div>
+    <p class="meta" id="meta"></p>
+  </div>
+</div>
+<script src="engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var KEY = 'chargeplan-data';
+  var $ = function (id) { return document.getElementById(id); };
+  function toMin(t) { var p = t.split(':'); return (+p[0]) * 60 + (+p[1]); }
+  function nowMin() { var d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
+  function hmin(m) { var h = Math.floor(m / 60), mm = Math.round(m % 60); return h + 'h ' + String(mm).padStart(2, '0') + 'm'; }
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch (e) { return null; }
+  }
+  function save() {
+    localStorage.setItem(KEY, JSON.stringify({
+      cap: $('f-cap').value, now: $('f-now').value, target: $('f-target').value,
+      kw: $('f-kw').value, ready: $('f-ready').value,
+      wstart: $('f-wstart').value, wend: $('f-wend').value, rate: $('f-rate').value
+    }));
+  }
+
+  function plan() {
+    var cap = +$('f-cap').value || 60, from = +$('f-now').value || 0, to = +$('f-target').value || 80;
+    var kw = +$('f-kw').value || 11;
+    var kwh = ChargeEngine.energyNeeded(cap, from, to);
+    var mins = ChargeEngine.minutesNeeded(kwh, kw, cap, from, to);
+    var p = ChargeEngine.plan(nowMin(), toMin($('f-ready').value || '07:00'), mins, toMin($('f-wstart').value || '23:00'), toMin($('f-wend').value || '07:00'));
+    var price = ChargeEngine.cost(kwh, +$('f-rate').value || 0);
+
+    $('result').classList.remove('hidden');
+    var v = $('verdict');
+    v.className = 'verdict ' + p.verdict;
+    if (p.verdict === 'already-there') v.textContent = 'Already at or above target - no charge needed.';
+    else if (p.verdict === 'comfortable') v.textContent = 'Comfortable - done ' + hmin(p.slackMin) + ' before you need the car.';
+    else if (p.verdict === 'tight') v.textContent = 'Tight - finishes with only ' + hmin(Math.max(0, p.slackMin)) + ' to spare.';
+    else if (p.verdict === 'wont-fit') v.textContent = 'Won\'t fit - only ' + hmin(p.chargedMin) + ' of ' + hmin(p.totalMin) + ' of charging fits before the deadline. Lower the target or plug in now.';
+    else v.textContent = 'No cheap window before the deadline - plug in now at peak price or move the deadline.';
+
+    var box = $('sessions'); box.innerHTML = '';
+    p.sessions.forEach(function (s) {
+      var div = document.createElement('div');
+      div.className = 'sess';
+      var l = document.createElement('span'); l.textContent = 'Charge';
+      var t = document.createElement('span'); t.className = 't';
+      t.textContent = ChargeEngine.fmtDay(s.start, nowMin()) + ' - ' + ChargeEngine.fmtDay(s.end, nowMin());
+      div.appendChild(l); div.appendChild(t); box.appendChild(div);
+    });
+    $('meta').textContent = kwh + ' kWh needed (' + hmin(mins) + ' at ' + kw + ' kW, taper above 80% priced in) - about $' + price.toFixed(2) + ' at off-peak price.';
+    save();
+  }
+
+  $('f-plan').addEventListener('click', plan);
+  var d0 = load();
+  if (d0) {
+    ['cap','now','target','kw','ready','wstart','wend','rate'].forEach(function (k) {
+      if (d0[k] !== undefined) $('f-' + k).value = d0[k];
+    });
+    plan();
+  }
+})();
+</script>
+</body>
+</html>
